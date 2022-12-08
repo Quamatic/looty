@@ -1,5 +1,9 @@
 local t = require(script.Parent.Parent.t)
+local None = require(script.Parent.None)
+local Config = require(script.Parent.Config)
+local log = require(script.Parent.log)
 
+-- Typecheckers
 local validRolls = t.union(
     t.numberPositive,
     t.interface({
@@ -10,7 +14,7 @@ local validRolls = t.union(
 
 local validItems = t.union(
     t.array(t.interface({
-        id = t.any,
+        id = t.string,
         weight = t.optional(t.numberPositive),
         modifiers = t.optional(t.callback),
     })),
@@ -19,6 +23,7 @@ local validItems = t.union(
     end)
 )
 
+-- Implementation
 local LootPool = {}
 LootPool.__index = LootPool
 
@@ -60,7 +65,10 @@ function LootPoolBuilder:setRolls(rolls)
     return self
 end
 
-function LootPoolBuilder:when(predicate)
+--[[
+    Adds a predicate to the loot pool, which is required to be successful for the pool to roll.
+]]
+function LootPoolBuilder:addPredicate(predicate)
     table.insert(self._predicates, predicate)
     return self
 end
@@ -81,9 +89,8 @@ function LootPool.new(name, items, rolls, predicates, middleware)
 
     return setmetatable({
         _name = name,
-        _items = table.freeze(items),
+        _items = items,
         _rolls = rolls,
-        _modifiers = {},
         _predicates = predicates,
         _middleware = middleware,
     }, LootPool)
@@ -110,7 +117,10 @@ function LootPool:roll(state)
     -- Roll predicates
     for _, predicate in ipairs(self._predicates) do
         if not predicate(state) then
-            print(string.format("[Looty Debug] - Predicate %s failed on pool %s", debug.info(predicate, "n"), self._name))
+            -- Log if needed
+            if Config.get("logFailedPredicates") then
+                log(string.format("Predicate %s failed on pool %s", debug.info(predicate, "n"), self._name))
+            end
             -- Predicate failed, return empty result
             return {}
         end
@@ -138,10 +148,21 @@ function LootPool:roll(state)
             counter += item.weight
 
             if counter > chosen then
+                -- If this item is None, then it is just an empty roll. So don't do any processing after this.
+                if item.id == None then
+                    break
+                end
+
+                item = table.freeze(table.clone(item))
+
                 if item.modifiers ~= nil then
                     -- Apply modifiers on this item
+                    -- Modifiers are expected to return the item source back as immutable
                     for _, modifier in ipairs(item.modifiers) do
-                        modifier(item, state)
+                        local modified = modifier(item, state)
+                        table.freeze(modified)
+
+                        item = modified
                     end
                 end
 
@@ -160,11 +181,18 @@ function LootPool:roll(state)
     return results
 end
 
+-- Creates a detailed format of the loot pool
 function LootPool:__tostring()
     local items = table.create(#self._items)
 
+    local weight = 0
+    for _, item in self._items do
+        weight += item.weight
+    end
+
     for _, item in ipairs(self._items) do
-        table.insert(items, string.format("(item = %q, weight = %.2f)", item.id, item.weight))
+        local chance = item.weight / weight * 100
+        table.insert(items, string.format("(item = %q, weight = %.2f (chance: %.3f%%))", item.id, item.weight, chance))
     end
 
     return string.format("LootPool {\n\t%s\n}", table.concat(items, "\n\t"))
