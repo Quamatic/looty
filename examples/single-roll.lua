@@ -16,10 +16,10 @@ local pool = LootPool.builder()
 
 -- Create a loot table
 local tbl = LootTable.builder()
-    -- Tables can have their own context, but there is a default one if not provided.
-    :withContext({
+    -- Tables can have their own state, but there is a default one if not provided.
+    :withState({
         -- For the sake of an example, we're using our own random.
-        generator = Random.new(os.time()),
+        random = Random.new(os.time()),
         -- You can also add a luck modifier to increase odds of items in the pool.
         luck = 1,
     })

@@ -1,8 +1,8 @@
 local t = require(script.Parent.Parent.t)
 local LootPool = require(script.Parent.LootPool)
 
-local DEFAULT_LOOT_CONTEXT = {
-    generator = Random.new(),
+local DEFAULT_LOOT_STATE = {
+    random = Random.new(),
     luck = 1,
 }
 
@@ -20,12 +20,12 @@ LootTableBuilder.__index = LootTableBuilder
 function LootTableBuilder.new()
     return setmetatable({
         _pools = {},
-        _context = table.clone(DEFAULT_LOOT_CONTEXT)
+        _state = table.clone(DEFAULT_LOOT_STATE)
     }, LootTableBuilder)
 end
 
-function LootTableBuilder:withContext(context)
-    self._context = context
+function LootTableBuilder:withState(state)
+    self._state = state
     return self
 end
 
@@ -34,8 +34,14 @@ function LootTableBuilder:withLootPool(pool)
     return self
 end
 
+function LootTableBuilder:withLootPools(...)
+    local pools = { ... }
+    table.move(pools, 1, #pools, #self._pools + 1, self._pools)
+    return self
+end
+
 function LootTableBuilder:build()
-    return LootTable.new(self._pools, self._context)
+    return LootTable.new(self._pools, self._state)
 end
 
 --[[
@@ -43,13 +49,13 @@ end
 
     Loot tables are containers of individual loot pools
 ]]
-function LootTable.new(pools, context)
+function LootTable.new(pools, state)
     assert(t.array(isLootPool)(pools))
     assert(#pools >= 1, "You must provide at least one pool in a loot table")
 
     return setmetatable({
         _pools = pools,
-        _context = context,
+        _state = state,
     }, LootTable)
 end
 
@@ -57,11 +63,15 @@ function LootTable.builder()
     return LootTableBuilder.new()
 end
 
+function LootTable:getState()
+    return self._state
+end
+
 function LootTable:roll()
     local results = {}
 
     for _, pool in ipairs(self._pools) do
-        local poolRollResults = pool:roll(self._context)
+        local poolRollResults = pool:roll(self._state)
         table.move(poolRollResults, 1, #poolRollResults, #results + 1, results)
     end
 
