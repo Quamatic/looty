@@ -1,8 +1,7 @@
 [package]
-name = "quamatic/looty"
+name = "quamatic/looty-examples"
 version = "0.1.0"
 registry = "https://github.com/UpliftGames/wally-index"
 realm = "shared"
 
 [dependencies]
-t = "osyrisrblx/t@3.0.0"

@@ -1,0 +1,21 @@
+{
+    "name": "example",
+    "tree": {
+        "$className": "DataModel",
+        "ServerScriptService": {
+            "$className": "ServerScriptService",
+            "Examples": {
+                "$path": "examples"
+            }
+        },
+        "ReplicatedStorage": {
+            "$className": "ReplicatedStorage",
+            "Lib": {
+                "$path": "Packages",
+                "Looty": {
+                  "$path": "lib"
+                }
+            }
+        }
+    }
+  }
