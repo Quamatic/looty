@@ -1,5 +1,5 @@
 local function log(str: string)
-    return string.format("[Looty]: %s", str)
+    print(string.format("[Looty]: %s", str))
 end
 
 return log
