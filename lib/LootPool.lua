@@ -76,10 +76,14 @@ local validRange = t.union(
 local validEntry = t.interface({
     -- Either a string or a loot pool
     name = t.union(t.string, t.isLootPool),
-    weight = t.optional(t.union(
-        t.numberPositive,
-        t.number(GUARANTEED_ROLL_WEIGHT)
-    )), -- Either positive or the value of a guaranteed roll
+    weight = t.optional(t.intersection(t.number, function(weight)
+        if weight % 1 ~= 0 then
+            return false, "weight cannot be a decimal"
+        elseif weight < 0 and weight ~= GUARANTEED_ROLL_WEIGHT then
+            return false, "weight cannot be a negative value other than -1"
+        end
+        return true
+    end)),
     quantity = t.optional(validRange),
     luck = t.optional(t.number),
     predicates = t.optional(t.callback),
