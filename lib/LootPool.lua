@@ -75,6 +75,7 @@ local validRange = t.union(
 
 local validEntry = t.interface({
     -- Either a string or a loot pool
+    -- TODO: chance to Looty.ItemType
     name = t.union(t.string, t.isLootPool),
     weight = t.optional(t.intersection(t.number, function(weight)
         if weight % 1 ~= 0 then
