@@ -6,6 +6,9 @@ local LootPool = Looty.LootPool
 
 -- Predicate usage within Looty
 
+-- Predicates can be used on both entire pools and individual items (or item groups!)
+-- They can be quite useful for conditional drops, where somethings should be skipped if needed.
+
 -- Create a loot pool that only has 1 roll, meaning only one possible item can roll.
 -- Except, the pool will only run when a random roll between 1 and 2 is 1
 -- Gold = 40%, Silver = 60%

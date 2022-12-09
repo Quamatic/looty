@@ -6,7 +6,11 @@ local log = require(script.Parent.log)
 -- This value makes it so items with this weight are guaranteed to roll
 local GUARANTEED_ROLL_WEIGHT = -1
 
+-- Default item weight if none is provided on an item
+local DEFAULT_ITEM_WEIGHT = 1
+
 -- Implementation
+
 local LootPool = {}
 LootPool.__index = LootPool
 
@@ -36,7 +40,7 @@ end
 function LootPoolBuilder:addItem(item)
     -- Default weight to 1
     if item.weight == nil then
-        item.weight = 1
+        item.weight = DEFAULT_ITEM_WEIGHT
     end
 
     table.insert(self._items, item)
@@ -61,7 +65,7 @@ function LootPoolBuilder:build(name)
 end
 
 -- Typecheckers
-local validRolls = t.union(
+local validRange = t.union(
     t.numberPositive,
     t.interface({
         min = t.numberPositive,
@@ -75,8 +79,9 @@ local validEntry = t.interface({
     weight = t.optional(t.union(
         t.numberPositive,
         t.number(GUARANTEED_ROLL_WEIGHT)
-    )), -- Either positive or -1
-    quantity = t.optional(t.number),
+    )), -- Either positive or the value of a guaranteed roll
+    quantity = t.optional(validRange),
+    luck = t.optional(t.number),
     predicates = t.optional(t.callback),
     modifiers = t.optional(t.callback),
 })
@@ -95,7 +100,7 @@ local validItems = t.union(
 ]]
 function LootPool.new(name, items, rolls, predicates, middleware)
     assert(validItems(items))
-    assert(validRolls(rolls))
+    assert(validRange(rolls))
     assert(t.array(t.callback)(predicates))
 
     return setmetatable({
@@ -217,7 +222,7 @@ function LootPool:__tostring()
 
     for _, item in ipairs(self._items) do
         local chance = item.weight / weight * 100
-        table.insert(items, string.format("(item = %q, weight = %.2f (chance: %.3f%%))", item.id, item.weight, chance))
+        table.insert(items, string.format("(item = %q, weight = %d (chance: %d%%))", item.id, item.weight, chance))
     end
 
     return string.format("LootPool {\n\t%s\n}", table.concat(items, "\n\t"))
