@@ -12,7 +12,7 @@ local pool = LootPool.builder()
     :setRolls(1)
     :addItem({ id = "gold", weight = 0.6 })
     :addItem({ id = "silver", weight = 0.4 })
-    :build()
+    :build("possible-empty")
 
 -- Create a loot table
 local tbl = LootTable.builder()

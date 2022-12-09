@@ -3,25 +3,8 @@ local None = require(script.Parent.None)
 local Config = require(script.Parent.Config)
 local log = require(script.Parent.log)
 
--- Typecheckers
-local validRolls = t.union(
-    t.numberPositive,
-    t.interface({
-        min = t.numberPositive,
-        max = t.numberPositive,
-    })
-)
-
-local validItems = t.union(
-    t.array(t.interface({
-        name = t.string,
-        weight = t.optional(t.numberPositive),
-        modifiers = t.optional(t.callback),
-    })),
-    t.intersection(function(items)
-        return #items > 0, "You must provide at least one item"
-    end)
-)
+-- This value makes it so items with this weight are guaranteed to roll
+local GUARANTEED_ROLL_WEIGHT = -1
 
 -- Implementation
 local LootPool = {}
@@ -76,6 +59,32 @@ end
 function LootPoolBuilder:build(name)
     return LootPool.new(name, self._items, self._rolls, self._predicates, {})
 end
+
+-- Typecheckers
+local validRolls = t.union(
+    t.numberPositive,
+    t.interface({
+        min = t.numberPositive,
+        max = t.numberPositive,
+    })
+)
+
+local validItems = t.union(
+    t.array(t.interface({
+        -- Either a string or a loot pool
+        name = t.union(t.string, t.isLootPool),
+        weight = t.optional(t.union(
+            t.numberPositive,
+            t.number(GUARANTEED_ROLL_WEIGHT)
+        )), -- Either positive or -1
+        quantity = t.optional(t.number),
+        predicates = t.optional(t.callback),
+        modifiers = t.optional(t.callback),
+    })),
+    t.intersection(function(items)
+        return #items > 0, "You must provide at least one item"
+    end)
+)
 
 --[[
     Creates a new LootPool
@@ -147,7 +156,7 @@ function LootPool:roll(state)
         for _, item in self._items do
             counter += item.weight
 
-            if counter > chosen then
+            if counter > chosen or item.weight == GUARANTEED_ROLL_WEIGHT then
                 -- If this item is None, then it is just an empty roll. So don't do any processing after this.
                 if item.name == None then
                     break

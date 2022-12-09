@@ -40,6 +40,10 @@ function LootTableBuilder:withLootPools(...)
     return self
 end
 
+function LootTableBuilder:withMiddleware()
+    
+end
+
 function LootTableBuilder:build()
     return LootTable.new(self._pools, self._state)
 end
