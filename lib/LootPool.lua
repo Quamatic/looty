@@ -69,18 +69,20 @@ local validRolls = t.union(
     })
 )
 
+local validEntry = t.interface({
+    -- Either a string or a loot pool
+    name = t.union(t.string, t.isLootPool),
+    weight = t.optional(t.union(
+        t.numberPositive,
+        t.number(GUARANTEED_ROLL_WEIGHT)
+    )), -- Either positive or -1
+    quantity = t.optional(t.number),
+    predicates = t.optional(t.callback),
+    modifiers = t.optional(t.callback),
+})
+
 local validItems = t.union(
-    t.array(t.interface({
-        -- Either a string or a loot pool
-        name = t.union(t.string, t.isLootPool),
-        weight = t.optional(t.union(
-            t.numberPositive,
-            t.number(GUARANTEED_ROLL_WEIGHT)
-        )), -- Either positive or -1
-        quantity = t.optional(t.number),
-        predicates = t.optional(t.callback),
-        modifiers = t.optional(t.callback),
-    })),
+    t.array(t.union(validEntry, t.array(validEntry))),
     t.intersection(function(items)
         return #items > 0, "You must provide at least one item"
     end)
@@ -145,7 +147,12 @@ function LootPool:roll(state)
     -- Get total pool weight
     local weight = 0
     for _, item in self._items do
-        weight += item.weight
+        -- Boost item weights that have luck bonuses, or just default
+        local addition = if item.luck ~= nil
+            then math.floor(item.weight + item.luck * state.luck)
+            else item.weight
+
+        weight += addition
     end
 
     local results = {}
@@ -188,6 +195,15 @@ function LootPool:roll(state)
     print(string.format("%s -> %d (%d)", self._name, rolls, #results))
 
     return results
+end
+
+-- Returns the loot pool in raw form, which can be useful if you want to save it.
+function LootPool:asPointer()
+    return {
+        name = self._name,
+        rolls = self._rolls,
+        items = self._items,
+    }
 end
 
 -- Creates a detailed format of the loot pool
