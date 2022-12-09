@@ -12,7 +12,7 @@ local LootPool = Looty.LootPool
 local pool = LootPool.builder()
     :setRolls(1)
     -- Pool predicates get passed the state of the table, including the random number generator used.
-    :addPredicate(function(state)
+    :withPredicate(function(state)
         return state.random:NextInteger(1, 2) == 1
     end)
     :addItem({ id = "gold", weight = 0.6 })

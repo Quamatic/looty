@@ -14,7 +14,7 @@ local validRolls = t.union(
 
 local validItems = t.union(
     t.array(t.interface({
-        id = t.string,
+        name = t.string,
         weight = t.optional(t.numberPositive),
         modifiers = t.optional(t.callback),
     })),
@@ -68,7 +68,7 @@ end
 --[[
     Adds a predicate to the loot pool, which is required to be successful for the pool to roll.
 ]]
-function LootPoolBuilder:addPredicate(predicate)
+function LootPoolBuilder:withPredicate(predicate)
     table.insert(self._predicates, predicate)
     return self
 end
@@ -149,7 +149,7 @@ function LootPool:roll(state)
 
             if counter > chosen then
                 -- If this item is None, then it is just an empty roll. So don't do any processing after this.
-                if item.id == None then
+                if item.name == None then
                     break
                 end
 
@@ -166,7 +166,7 @@ function LootPool:roll(state)
                     end
                 end
 
-                table.insert(results, item.id)
+                table.insert(results, item.name)
                 break
             end
         end
