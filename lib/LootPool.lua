@@ -1,236 +1,327 @@
-local t = require(script.Parent.Parent.t)
-local None = require(script.Parent.None)
+local ItemType = require(script.Parent.ItemType)
 local Config = require(script.Parent.Config)
-local log = require(script.Parent.log)
+local rollRange = require(script.Parent.rollRange)
+local t = require(script.Parent.Parent.t)
+local Types = require(script.Parent.Types)
 
--- This value makes it so items with this weight are guaranteed to roll
-local GUARANTEED_ROLL_WEIGHT = -1
+type PoolContext = Types.PoolContext
 
--- Default item weight if none is provided on an item
-local DEFAULT_ITEM_WEIGHT = 1
-
--- Implementation
-
+--[=[
+    @class LootPool
+]=]
 local LootPool = {}
 LootPool.__index = LootPool
 
--- Pool builder
-local LootPoolBuilder = {}
-LootPoolBuilder.__index = LootPoolBuilder
-
---[[
-    ```lua
-    local pool = LootPool.builder()
-        :setRolls(2)
-        :addItem({ id = "coins", weight = 0.7, })
-        :addItem({ id = "gems", weight = 0.3, })
-        :build()
-
-    local items = pool:roll()
-    ```
-]]
-function LootPoolBuilder.new()
-    return setmetatable({
-        _items = {},
-        _rolls = 1,
-        _predicates = {},
-    }, LootPoolBuilder)
-end
-
-function LootPoolBuilder:addItem(item)
-    -- Default weight to 1
-    if item.weight == nil then
-        item.weight = DEFAULT_ITEM_WEIGHT
-    end
-
-    table.insert(self._items, item)
-    return self
-end
-
-function LootPoolBuilder:setRolls(rolls)
-    self._rolls = rolls
-    return self
-end
-
---[[
-    Adds a predicate to the loot pool, which is required to be successful for the pool to roll.
-]]
-function LootPoolBuilder:withPredicate(predicate)
-    table.insert(self._predicates, predicate)
-    return self
-end
-
-function LootPoolBuilder:build(name)
-    return LootPool.new(name, self._items, self._rolls, self._predicates, {})
-end
-
 -- Typecheckers
-local validRange = t.union(
-    t.numberPositive,
-    t.interface({
-        min = t.numberPositive,
-        max = t.numberPositive,
+local validateAmount = t.intersection(t.integer, t.numberPositive)
+
+local validateRange = t.union(
+    validateAmount,
+    t.strictInterface({
+        min = validateAmount,
+        max = validateAmount,
     })
 )
 
-local validEntry = t.interface({
-    -- Either a string or a loot pool
-    -- TODO: chance to Looty.ItemType
-    name = t.union(t.string, t.isLootPool),
-    weight = t.optional(t.intersection(t.number, function(weight)
-        if weight % 1 ~= 0 then
-            return false, "weight cannot be a decimal"
-        elseif weight < 0 and weight ~= GUARANTEED_ROLL_WEIGHT then
-            return false, "weight cannot be a negative value other than -1"
-        end
-        return true
-    end)),
-    quantity = t.optional(validRange),
-    luck = t.optional(t.number),
-    predicates = t.optional(t.callback),
-    modifiers = t.optional(t.callback),
+local validateItems
+validateItems = t.intersection(t.array(t.intersection(
+    t.interface({
+        weight = t.intersection(t.integer, function(weight)
+            local guaranteedRollWeight = Config.get("guaranteedRollWeight")
+
+            if weight < 0 and weight ~= guaranteedRollWeight then
+                return false, string.format(
+                    "Weight cannot be below negative unless it is %d for ensuring guaranteed selection",
+                    guaranteedRollWeight
+                )
+            end
+
+            return true
+        end),
+        luck = t.optional(t.numberPositive),
+        predicates = t.optional(t.array(t.callback)),
+    }),
+
+    t.union(
+        t.interface({
+            type = t.literal("Empty"),
+        }),
+
+        t.interface({
+            type = t.literal("Item"),
+            identifier = t.string,
+            modifiers = t.optional(t.array(t.callback)),
+        }),
+
+        t.interface({
+            type = t.literal("ItemQuantity"),
+            identifier = t.string,
+            quantity = validateRange,
+            modifiers = t.optional(t.array(t.callback)),
+        }),
+
+        t.interface({
+            type = t.literal("LootReference"),
+            reference = t.intersection(t.table, function(object)
+                return LootPool.is(object)
+            end)
+        }),
+
+        t.interface({
+            type = t.literal("ItemGroup"),
+            group = validateItems,
+        })
+    ))
+), function(items)
+    if #items == 0 then
+        return false, "You must provide at least one item inside the pool"
+    end
+    return true
+end)
+
+local validatePoolData = t.interface({
+    name = t.optional(t.string),
+    rolls = validateRange,
+    items = validateItems,
+    predicates = t.optional(t.array(t.callback)),
+    state = t.optional(t.table)
 })
+-- End typecheckers
 
-local validItems = t.union(
-    t.array(t.union(validEntry, t.array(validEntry))),
-    t.intersection(function(items)
-        return #items > 0, "You must provide at least one item"
-    end)
-)
+--[=[
+    @interface BasePoolItem
+    @within LootPool
 
---[[
-    Creates a new LootPool
+    :::tip
+    Setting an item's weight to -1 will make it guaranteed to roll, if needed. You can also change the guaranteed roll weight inside of the config.
+    :::
 
-    A LootPool is the core container of individual pools, and designed to be consumed
-]]
-function LootPool.new(name, items, rolls, predicates, middleware)
-    assert(validItems(items))
-    assert(validRange(rolls))
-    assert(t.array(t.callback)(predicates))
+    .type ItemType
+    .weight number
+    .luck number?
+    .predicates {(context: PoolContext) -> boolean}?
+]=]
+
+--[=[
+    @interface Empty
+    @within LootPool
+
+    .type "Empty"
+]=]
+
+--[=[
+    @interface Item
+    @within LootPool
+
+    .type "Item"
+    .identifier string
+    .modifiers {<T>(context: PoolContext) -> T}?
+]=]
+
+--[=[
+    @interface ItemQuantity
+    @within LootPool
+
+    .type "ItemQuantity"
+    .identifier string
+    .quantity number | { min: number, max: number }
+    .modifiers {<T>(context: PoolContext) -> T}?
+]=]
+
+--[=[
+    @interface ItemGroup
+    @within LootPool
+
+    .type "ItemGroup"
+    .group {PoolItem}
+]=]
+
+--[=[
+    @interface LootReference
+    @within LootPool
+
+    .type "LootReference"
+    .reference LootPool
+]=]
+
+--[=[
+    @interface PoolData
+    @within LootPool
+
+    .name string?
+    .rolls number | { min: number, max: number }
+    .items {PoolItem}
+    .predicates {(context: PoolContext) -> boolean}?
+    .state any?
+]=]
+
+--[=[
+    Constructs a new LootPool
+
+    :::warning
+    If you provide no items to roll, Looty will throw an error. You'll have nothing to roll!
+    :::
+
+    @param data PoolData -- The structure of your pool
+    @return LootPool
+]=]
+function LootPool.new(data)
+    assert(validatePoolData(data))
+
+    local totalPoolWeight = 0
+    for _, item in data.items do
+        -- Don't count guaranteed items in the pool
+        if item.weight == Config.get("guaranteedRollWeight") then
+            continue
+        end
+
+        local itemLuck = item.luck or 1
+        local luckFromState = data.state.luck or 1
+
+        totalPoolWeight += math.floor(item.weight + itemLuck * luckFromState)
+    end
 
     return setmetatable({
-        _name = name,
-        _items = items,
-        _rolls = rolls,
-        _predicates = predicates,
-        _middleware = middleware,
+        _name = data.name,
+        _rolls = data.rolls,
+        _items = data.items,
+        _state = data.state,
+        _generator = Random.new(),
+        _totalPoolWeight = totalPoolWeight,
     }, LootPool)
 end
 
--- Checks if an object is a LootPool
-function LootPool.isLootPool(object)
+function LootPool:__iter()
+    return next, self._items
+end
+
+--[=[
+    Checks if an object is a LootPool
+
+    @param object any -- The object to check.
+    @return boolean -- `true` if the object is a `LootPool`.
+]=]
+function LootPool.is(object)
     return typeof(object) == "table" and getmetatable(object) == LootPool
 end
 
---[[
-    Creates a new LootPoolBuilder
-
-    Useful for ease of construction of a loot pool
-]]
-function LootPool.builder()
-    return LootPoolBuilder.new()
+function LootPool:setState(state)
+    
 end
 
---[[
-    Rolls the LootPool
-]]
-function LootPool:roll(state)
-    -- Roll predicates
-    for _, predicate in ipairs(self._predicates) do
-        if not predicate(state) then
-            -- Log if needed
-            if Config.get("logFailedPredicates") then
-                log(string.format("Predicate %s failed on pool %s", debug.info(predicate, "n"), self._name))
-            end
-            -- Predicate failed, return empty result
-            return {}
-        end
-    end
+function LootPool:setContext()
+    
+end
 
-    local random = state.random
+--[=[
+    Returns the total weight of all items combined in the pool
 
-    -- Get the total rolls that will be done
-    local rolls = if typeof(self._rolls) == "number"
-        then self._rolls
-        else random:NextInteger(self._rolls.min, self._rolls.max)
+    @return number
+]=]
+function LootPool:getTotalWeight()
+    return self._totalPoolWeight
+end
 
-    -- Get total pool weight
-    local weight = 0
-    for _, item in self._items do
-        -- Boost item weights that have luck bonuses, or just default
-        local addition = if item.luck ~= nil
-            then math.floor(item.weight + item.luck * state.luck)
-            else item.weight
+function LootPool:_choose()
+    local chosen = self._generator:NextNumber(0, self._totalPoolWeight)
+    local counter = 0
 
-        weight += addition
-    end
+    for _, item in ipairs(self._items) do
+        counter += item.weight
 
-    local results = {}
-    for _ = 1, rolls do
-        local chosen = random:NextNumber(0, weight)
-        local counter = 0
-
-        for _, item in self._items do
-            counter += item.weight
-
-            if counter > chosen or item.weight == GUARANTEED_ROLL_WEIGHT then
-                -- If this item is None, then it is just an empty roll. So don't do any processing after this.
-                if item.name == None then
-                    break
-                end
-
-                item = table.freeze(table.clone(item))
-
-                if item.modifiers ~= nil then
-                    -- Apply modifiers on this item
-                    -- Modifiers are expected to return the item source back as immutable
-                    for _, modifier in ipairs(item.modifiers) do
-                        local modified = modifier(item, state)
-                        table.freeze(modified)
-
-                        item = modified
+        if counter > chosen or item.weight == Config.get("guaranteedRollWeight") then
+            -- Check if item has predicates and do validation if it does
+            if item.predicates ~= nil then
+                for _, predicate in ipairs(item.predicates) do
+                    if not predicate(self._state) then
+                        break
                     end
                 end
+            end
 
-                table.insert(results, item.name)
-                break
+            if item.type == ItemType.Item then
+                return {
+                    {
+                        item = item.identifier,
+                    },
+                }
+            elseif item.Type == ItemType.ItemQuantity then
+                local quantity = rollRange(item.quantity, self._generator)
+
+                return {
+                    {
+                        item = item.identifier,
+                        quantity = quantity,
+                    },
+                }
+            elseif item.type == ItemType.ItemGroup then
+                local result = table.create(#item.group)
+
+                local copied = table.clone(item.group)
+                table.move(copied, 1, #copied, 1, result)
+
+                return result
+            elseif item.type == ItemType.LootReference then
+                if item.reference == self then
+                    error("[Looty] - You cannot have a direct reference to a loot pool", 2)
+                end
+
+                local results = item.reference:roll({})
+
+                local result = table.create(#results)
+                table.move(results, 1, #results, 1, result)
+
+                return result
             end
         end
     end
 
-    if #results == 0 then
-        error(string.format("[Looty] Rolled zero items in this pool %s - this should not happen.", self._name))
+    error("[Looty] - Rolled nothing, this should not happen.")
+end
+
+function LootPool:_roll(context: PoolContext?)
+    if self._predicates ~= nil then
+        for _, predicate in ipairs(self._predicates) do
+            if not predicate(context) then
+                return {}
+            end
+        end
     end
 
-    print(string.format("%s -> %d (%d)", self._name, rolls, #results))
+    local rolls = rollRange(self._rolls, self._generator)
+    local results = {}
+
+    for _ = 1, rolls do
+        local result = self:_choose()
+        table.move(result, 1, #result, #results + 1, results)
+    end
 
     return results
 end
 
--- Returns the loot pool in raw form, which can be useful if you want to save it.
-function LootPool:asPointer()
-    return {
-        name = self._name,
-        rolls = self._rolls,
-        items = self._items,
-    }
+--[=[
+    Does the rolling process of the loot pool
+
+    :::caution
+    If the pool has predicates provided, and any of them fail, then this will return an empty table. You can specify the behavior of predicates.
+    :::
+
+    @param context PoolContext? -- Optional context to specify how the pool should roll. If none is specified then the pool will fall back to the default context.
+    @return {{ item: string, quantity: number? }} -- The results of the roll.
+]=]
+function LootPool:roll(context: PoolContext?)
+    return self:_roll(context)
 end
 
--- Creates a detailed format of the loot pool
 function LootPool:__tostring()
-    local items = table.create(#self._items)
-
-    local weight = 0
-    for _, item in self._items do
-        weight += item.weight
-    end
-
-    for _, item in ipairs(self._items) do
-        local chance = item.weight / weight * 100
-        table.insert(items, string.format("(item = %q, weight = %d (chance: %d%%))", item.id, item.weight, chance))
-    end
-
-    return string.format("LootPool {\n\t%s\n}", table.concat(items, "\n\t"))
+    return string.format(
+        "LootPool(weight=%d, items=%s, state=%s)",
+        self._totalPoolWeight,
+        tostring(self._items),
+        tostring(self._state)
+    )
 end
+
+export type LootPool = typeof(LootPool.new())
 
 return LootPool
