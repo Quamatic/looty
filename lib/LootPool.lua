@@ -175,7 +175,9 @@ local validatePoolData = t.interface({
     @return LootPool
 ]=]
 function LootPool.new(data)
-    assert(validatePoolData(data))
+    if Config.get("typeChecking") then
+        assert(validatePoolData(data))
+    end
 
     local totalPoolWeight = 0
     for _, item in data.items do
