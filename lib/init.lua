@@ -44,13 +44,21 @@
     ```
 ]=]
 
+--[=[
+    @within Looty
+    @function log
+    @param message string
+]=]
+
 local LootPool = require(script.LootPool)
 local LootTable = require(script.LootTable)
 local Config = require(script.Config)
 local ItemType = require(script.ItemType)
+local log = require(script.log)
 
 return table.freeze({
     setConfig = Config.set,
+    log = log,
 
     ItemType = ItemType,
     LootPool = LootPool,

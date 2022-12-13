@@ -3,6 +3,7 @@ local Config = require(script.Parent.Config)
 local rollRange = require(script.Parent.rollRange)
 local t = require(script.Parent.Parent.t)
 local Types = require(script.Parent.Types)
+local log = require(script.Parent.log)
 
 type PoolContext = Types.PoolContext
 
@@ -81,7 +82,7 @@ end)
 
 local validatePoolData = t.interface({
     name = t.optional(t.string),
-    rolls = validateRange,
+    rolls = t.union(validateRange, t.callback),
     items = validateItems,
     predicates = t.optional(t.array(t.callback)),
     state = t.optional(t.table)
@@ -145,14 +146,22 @@ local validatePoolData = t.interface({
 ]=]
 
 --[=[
+    @interface PoolContext
+    @within LootPool
+
+    .generator Random | number?
+    .luck number?
+]=]
+
+--[=[
     @interface PoolData
     @within LootPool
 
-    .name string?
-    .rolls number | { min: number, max: number }
-    .items {PoolItem}
-    .predicates {(context: PoolContext) -> boolean}?
-    .state any?
+    .name string? -- Optional debugging name for the pool
+    .rolls number | { min: number, max: number } | (context: PoolContext) -> number -- The amount of rolls provided. Can either be constant, ranged, or a custom generator.
+    .items {PoolItem} -- The items in the pool
+    .predicates {(context: PoolContext) -> boolean}? -- Optional predicates that can prevent the pool from rolling.
+    .state {}? -- Optional state that is merged into the [PoolContext].
 ]=]
 
 --[=[
@@ -182,17 +191,14 @@ function LootPool.new(data)
     end
 
     return setmetatable({
-        _name = data.name,
+        _name = data.name or string.format("%s@%s", debug.info(2, "s"), debug.info(2, "l")),
         _rolls = data.rolls,
         _items = data.items,
         _state = data.state,
+        _predicates = data.predicates or {},
         _generator = Random.new(),
         _totalPoolWeight = totalPoolWeight,
     }, LootPool)
-end
-
-function LootPool:__iter()
-    return next, self._items
 end
 
 --[=[
@@ -205,16 +211,12 @@ function LootPool.is(object)
     return typeof(object) == "table" and getmetatable(object) == LootPool
 end
 
-function LootPool:setState(state)
-    
-end
-
-function LootPool:setContext()
-    
-end
-
 --[=[
     Returns the total weight of all items combined in the pool
+
+    :::info
+    This does not return any modified weight from things like luck.
+    :::
 
     @return number
 ]=]
@@ -222,43 +224,72 @@ function LootPool:getTotalWeight()
     return self._totalPoolWeight
 end
 
-function LootPool:_choose()
+--[=[
+    Returns the name of the loot pool
+
+    :::info
+    If no name is provided during creation, then the pool name is defaulted to the format of `file-name@line`
+    :::
+
+    @return string
+]=]
+function LootPool:getName()
+    return self._name
+end
+
+function LootPool:_log(message: string)
+    log(string.format("[Pool %s] - %s", self._name, message))
+end
+
+function LootPool:_choose(context: PoolContext?)
     local chosen = self._generator:NextNumber(0, self._totalPoolWeight)
     local counter = 0
+
+    local result = {}
 
     for _, item in ipairs(self._items) do
         counter += item.weight
 
         if counter > chosen or item.weight == Config.get("guaranteedRollWeight") then
             -- Check if item has predicates and do validation if it does
+            local pass = true
+
             if item.predicates ~= nil then
                 for _, predicate in ipairs(item.predicates) do
-                    if not predicate(self._state) then
+                    if not predicate(context) then
+                        -- Log this predicate if needed
+                        if Config.get("logFailedPredicates") then
+                            self:_log(string.format(
+                                "Failed predicate %s for item %s, passing.",
+                                debug.info(predicate, "n"),
+                                item.type
+                            ))
+                        end
+
+                        pass = false
                         break
                     end
                 end
             end
 
+            if not pass then
+                continue
+            end
+
             if item.type == ItemType.Item then
-                return {
-                    {
-                        item = item.identifier,
-                    },
-                }
+                table.insert(result, {
+                    item = item.identifier,
+                })
             elseif item.Type == ItemType.ItemQuantity then
                 local quantity = rollRange(item.quantity, self._generator)
 
-                return {
-                    {
-                        item = item.identifier,
-                        quantity = quantity,
-                    },
-                }
+                table.insert(result, {
+                    item = item.identifier,
+                    quantity = quantity,
+                })
             elseif item.type == ItemType.ItemGroup then
-                local result = table.create(#item.group)
-
                 local copied = table.clone(item.group)
-                table.move(copied, 1, #copied, 1, result)
+                table.move(copied, 1, #copied, #result + 1, result)
 
                 return result
             elseif item.type == ItemType.LootReference then
@@ -266,21 +297,23 @@ function LootPool:_choose()
                     error("[Looty] - You cannot have a direct reference to a loot pool", 2)
                 end
 
-                local results = item.reference:roll({})
-
-                local result = table.create(#results)
-                table.move(results, 1, #results, 1, result)
+                local results = item.reference:roll(context)
+                table.move(results, 1, #results, #result + 1, result)
 
                 return result
             end
         end
     end
 
-    error("[Looty] - Rolled nothing, this should not happen.")
+    if #result == 0 then
+        error("[Looty] - Rolled nothing, this should not happen.")
+    end
+
+    return result
 end
 
 function LootPool:_roll(context: PoolContext?)
-    if self._predicates ~= nil then
+    if #self._predicates > 0 then
         for _, predicate in ipairs(self._predicates) do
             if not predicate(context) then
                 return {}
@@ -288,12 +321,24 @@ function LootPool:_roll(context: PoolContext?)
         end
     end
 
-    local rolls = rollRange(self._rolls, self._generator)
+    local rolls
+    if typeof(self._rolls) == "function" then
+        local amount = self._rolls(context)
+        if typeof(amount) ~= "number" then
+            error(string.format("[Looty] - Expected number when getting roll amount on pool", self._name), 2)
+        end
+        rolls = math.floor(amount)
+    else
+        rolls = rollRange(self._rolls, self._generator)
+    end
+
     local results = {}
 
     for _ = 1, rolls do
-        local result = self:_choose()
-        table.move(result, 1, #result, #results + 1, results)
+        local result = self:_choose(context)
+        if result ~= nil then
+            table.move(result, 1, #result, #results + 1, results)
+        end
     end
 
     return results
@@ -313,12 +358,93 @@ function LootPool:roll(context: PoolContext?)
     return self:_roll(context)
 end
 
+--[=[
+    Returns a detailed format of the loot pool.
+
+    **Example:**
+
+    ```lua
+    local pool = LootPool.new({
+        rolls = 1,
+        items = {
+            {
+                type = ItemType.Item,
+                identifier = "gold",
+                weight = 4,
+            },
+            {
+                type = ItemType.ItemQuantity,
+                identifier = "silver",
+                quantity = 20,
+                weight = 1,
+            }
+        }
+    })
+
+    print(tostring(pool))
+
+    --[[
+        "LootPool(
+            totalPoolWeight=100,
+            items={
+                {
+                    type = "Item",
+                    identifier = "gold",
+                    weight = 4 (chance=80% | (4/5))
+                },
+                {
+                    type = "ItemQuantity",
+                    identifier = "silver",
+                    quantity = 20,
+                    weight = 1 (chance=20% | (1/5))
+                }
+            }
+        )"
+    ]]
+    ```
+
+    @return string
+]=]
 function LootPool:__tostring()
+    local items = table.create(#self._items)
+    local guaranteedRollWeight = Config.get("guaranteedRollWeight")
+
+    for _, item in self._items do
+        local format = {}
+
+        table.insert(format, string.format("type = %q", item.type))
+
+        if item.type == ItemType.Item or item.type == ItemType.ItemQuantity then
+            table.insert(format, string.format("identifier = %q", item.identifier))
+            table.insert(format, string.format("modifiers = %s", if item.modifiers ~= nil then tostring(#item.modifiers) else "0 (none provided)"))
+
+            if item.type == ItemType.ItemQuantity then
+                table.insert(format, string.format("quantity = %s", tostring(item.quantity)))
+            end
+        elseif item.type == ItemType.LootReference then
+            if item.reference == self then
+                table.insert(format, "reference = (SELF REFERENCE)")
+            else
+                table.insert(format, string.format("reference = %q", item.reference:getName()))
+            end
+        elseif item.type == ItemType.ItemGroup then
+            table.insert(format, "group = %d", #item.group)
+        end
+
+        if item.weight == guaranteedRollWeight then
+            table.insert(format, string.format("weight = %d (guaranteed roll)", guaranteedRollWeight))
+        else
+            table.insert(format, string.format("weight = %d (chance=%d%% | (%d/%d))", item.weight, item.weight / self._totalPoolWeight * 100, item.weight, self._totalPoolWeight))
+        end
+
+        table.insert(items, string.format("\t{\n\t\t\t%s\n\t\t}", table.concat(format, "\n\t\t\t")))
+    end
+
     return string.format(
-        "LootPool(weight=%d, items=%s, state=%s)",
+        "LootPool(\n\tname=%q\n\ttotalPoolWeight=%d,\n\titems=%s\n)",
+        self._name,
         self._totalPoolWeight,
-        tostring(self._items),
-        tostring(self._state)
+        string.format("{\n\t%s\n\t}", table.concat(items, ",\n\t"))
     )
 end
 

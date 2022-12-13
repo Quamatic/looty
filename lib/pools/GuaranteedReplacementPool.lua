@@ -13,6 +13,7 @@ function GuaranteedReplacementPool.new(data, sampler)
 
     self._sample = sampler or defaultSampler
     self._rolls = 0
+    self._modified = {}
 
     return setmetatable(self, GuaranteedReplacementPool)
 end

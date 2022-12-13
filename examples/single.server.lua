@@ -9,6 +9,11 @@ local reference = Looty.LootPool.new({
             type = "Item",
             identifier = "gold",
             weight = -1,
+            predicates = {
+                function ()
+                    return false
+                end
+            }
         },
         {
             type = "Item",
@@ -24,21 +29,15 @@ local pool = Looty.LootPool.new({
     rolls = 1,
     items = {
         {
-            type = "Empty",
-            weight = 60,
-        },
-        {
             type = "LootReference",
             reference = reference,
-            weight = 40,
+            weight = -1,
         }
     },
     predicates = {},
     state = { luck = 0 },
 })
 
-print(tostring(pool))
-
 for _, t in ipairs(pool:roll()) do
-    print(t, #t)
+    print(t.item)
 end
